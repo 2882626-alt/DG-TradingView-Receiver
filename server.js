@@ -9,16 +9,29 @@ const BOT_TOKEN = process.env.BOT_READ_TOKEN;
 const signals = new Map();
 const MAX_AGE_MS = 15 * 60 * 1000;
 
+const SUPPORTED_TIMEFRAMES = new Set([
+  "1", "2", "3", "5", "10",
+  "15", "30", "45", "60"
+]);
+
 function send(res, status, data) {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Cache-Control": "no-store"
   });
+
   res.end(JSON.stringify(data));
 }
 
 function authorized(actual, expected) {
-  if (!actual || !expected) return false;
+  if (
+    typeof actual !== "string" ||
+    typeof expected !== "string" ||
+    !actual ||
+    !expected
+  ) {
+    return false;
+  }
 
   const a = Buffer.from(actual);
   const b = Buffer.from(expected);
@@ -30,35 +43,60 @@ function authorized(actual, expected) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let tooLarge = false;
 
     req.on("data", chunk => {
+      if (tooLarge) return;
+
       body += chunk;
 
-      if (body.length > 4096) {
-        req.destroy();
+      if (Buffer.byteLength(body, "utf8") > 4096) {
+        tooLarge = true;
         reject(new Error("Payload too large"));
       }
     });
 
-    req.on("end", () => resolve(body));
+    req.on("end", () => {
+      if (!tooLarge) resolve(body);
+    });
+
     req.on("error", reject);
   });
+}
+
+function normalizeTimeframe(value) {
+  const raw = String(value ?? "").trim().toUpperCase();
+
+  let timeframe = raw;
+
+  if (raw === "H1" || raw === "1H") {
+    timeframe = "60";
+  } else if (/^M\d+$/.test(raw)) {
+    timeframe = raw.substring(1);
+  }
+
+  return SUPPORTED_TIMEFRAMES.has(timeframe)
+    ? timeframe
+    : null;
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
-  // HEALTH CHECK - DIAGNOSTIC V2
+  // HEALTH CHECK
   if (req.method === "GET" && url.pathname === "/health") {
     return send(res, 200, {
       success: true,
       service: "DG-TradingView-Receiver",
+      version: "universal-v3",
       ready: Boolean(TOKEN && BOT_TOKEN),
       checks: {
         webhookTokenLoaded: Boolean(TOKEN),
         botTokenLoaded: Boolean(BOT_TOKEN)
       },
-      version: "diagnostic-v2"
+      supportedTimeframes: [...SUPPORTED_TIMEFRAMES],
+      cachedTimeframes: [...signals.keys()],
+      time: new Date().toISOString()
     });
   }
 
@@ -75,28 +113,26 @@ const server = http.createServer(async (req, res) => {
 
       const action = String(
         data.action || ""
-      ).toUpperCase();
+      ).trim().toUpperCase();
 
-      const timeframe = String(
-        data.timeframe || ""
+      const timeframe = normalizeTimeframe(
+        data.timeframe
       );
 
       const symbol = String(
         data.symbol || ""
-      ).toUpperCase();
+      ).trim().toUpperCase();
 
-      // Supports M1, M5 and M15
       if (
         !["BUY", "SELL"].includes(action) ||
-        !["1", "5", "15"].includes(timeframe) ||
+        !timeframe ||
         !["XAUUSD", "XAU/USD"].includes(symbol)
       ) {
         return send(res, 400, {
-          error: "Invalid signal"
+          error: "Invalid signal",
+          supportedTimeframes: [...SUPPORTED_TIMEFRAMES]
         });
       }
-
-      const key = timeframe;
 
       const signal = {
         id: crypto.randomUUID(),
@@ -106,7 +142,12 @@ const server = http.createServer(async (req, res) => {
         receivedAt: new Date().toISOString()
       };
 
-      signals.set(key, signal);
+      // Independent signal storage for every timeframe
+      signals.set(timeframe, signal);
+
+      console.log(
+        `[TradingView] M${timeframe} ${action} received: ${signal.id}`
+      );
 
       return send(res, 200, {
         success: true,
@@ -115,12 +156,12 @@ const server = http.createServer(async (req, res) => {
 
     } catch (error) {
       return send(res, 400, {
-        error: "Invalid JSON"
+        error: "Invalid JSON or payload"
       });
     }
   }
 
-  // CTRADER BOT SIGNAL ENDPOINT
+  // CTRADER SIGNAL ENDPOINT
   if (req.method === "GET" && url.pathname === "/signal") {
     const token = req.headers["x-bot-token"];
 
@@ -130,12 +171,14 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    const timeframe = url.searchParams.get("timeframe");
+    const timeframe = normalizeTimeframe(
+      url.searchParams.get("timeframe")
+    );
 
-    // Supports M1, M5 and M15
-    if (!["1", "5", "15"].includes(timeframe)) {
+    if (!timeframe) {
       return send(res, 400, {
-        error: "Invalid timeframe"
+        error: "Invalid timeframe",
+        supportedTimeframes: [...SUPPORTED_TIMEFRAMES]
       });
     }
 
@@ -164,6 +207,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(
-    `DG TradingView Receiver listening on ${PORT}`
+    `DG TradingView Universal Receiver V3 listening on ${PORT}`
+  );
+
+  console.log(
+    "Supported timeframes:",
+    [...SUPPORTED_TIMEFRAMES].join(", ")
   );
 });
