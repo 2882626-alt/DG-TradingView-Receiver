@@ -85,9 +85,10 @@ const server = http.createServer(async (req, res) => {
         data.symbol || ""
       ).toUpperCase();
 
+      // Supports M1, M5 and M15
       if (
         !["BUY", "SELL"].includes(action) ||
-        !["5", "15"].includes(timeframe) ||
+        !["1", "5", "15"].includes(timeframe) ||
         !["XAUUSD", "XAU/USD"].includes(symbol)
       ) {
         return send(res, 400, {
@@ -131,7 +132,8 @@ const server = http.createServer(async (req, res) => {
 
     const timeframe = url.searchParams.get("timeframe");
 
-    if (!["5", "15"].includes(timeframe)) {
+    // Supports M1, M5 and M15
+    if (!["1", "5", "15"].includes(timeframe)) {
       return send(res, 400, {
         error: "Invalid timeframe"
       });
