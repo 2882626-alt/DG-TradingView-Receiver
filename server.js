@@ -47,7 +47,11 @@ function makeServer(env=process.env) {
       let body;
       try {body=JSON.parse(Buffer.concat(chunks).toString('utf8'));} catch {return send(400,{error:'Invalid JSON'});}
       if(!equal(body.token,tvToken)) return send(401,{error:'Unauthorized'});
-      const s=body.signal;
+      let s=body.signal;
+      if (s && s.strategy === M1 && typeof s.barTime === 'string') {
+        const close = Date.parse(s.barTime) + 60000;
+        s={...s,barClose:close,signalId:`${s.action}-${close}`};
+      }
       if(!validate(s)) return send(422,{error:'Invalid or stale DG V2 signal'});
       for(const [id,t] of seen) if(Date.now()-t>3600000) seen.delete(id);
       const key=s.strategy+':'+s.signalId;
