@@ -23,7 +23,7 @@ function makeServer(env=process.env) {
     const path=new URL(req.url,'http://localhost').pathname;
     const send=(status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
     const ready=typeof tvToken==='string' && tvToken.length>=20 && typeof botToken==='string' && botToken.length>=20 && tvToken!==botToken;
-    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v1',ready});
+    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v1',ready,checks:{webhookTokenValid:typeof tvToken==='string'&&tvToken.length>=20,botTokenValid:typeof botToken==='string'&&botToken.length>=20,distinctTokens:tvToken!==botToken}});
     if (!ready) return send(503,{error:'Configure distinct tokens, at least 20 characters each'});
     if (req.method==='GET' && path==='/dg-v2/signal') {
       if(!equal(req.headers['x-bot-token'],botToken)) return send(401,{error:'Unauthorized'});
