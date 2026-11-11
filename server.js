@@ -13,7 +13,12 @@ function equal(a,b) {
 function validate(s, now=Date.now()) {
   if (!s || ![STRATEGY,DIRECT,M1].includes(s.strategy) || s.symbol !== 'XAUUSD' || s.timeframe !== (s.strategy === M1 ? '1' : '5') || !['BUY','SELL'].includes(s.action)) return false;
   if (typeof s.signalId !== 'string' || s.signalId !== `${s.action}-${s.barClose}`) return false;
-  if (!Number.isSafeInteger(s.barClose) || s.barClose % (s.strategy === M1 ? 60000 : 300000) !== 0 || now-s.barClose > MAX_AGE || s.barClose-now > 10000) return false;
+  if (!Number.isSafeInteger(s.barClose) || s.barClose % (s.strategy === M1 ? 60000 : 300000) !== 0 || now-s.barClose > MAX_AGE) return false;
+  // TradingView {{time}} is the candle OPEN, even for intrabar alerts.
+  // Accept the current M1 candle immediately; never accept a future candle.
+  if (s.strategy === M1 && s.barOpen !== undefined) {
+    if (!Number.isSafeInteger(s.barOpen) || s.barOpen !== s.barClose - 60000 || s.barOpen > now) return false;
+  } else if (s.barClose-now > 10000) return false;
   if (s.strategy === DIRECT || s.strategy === M1) return true;
   if (![s.referencePrice,s.stopPrice,s.targetPrice].every(x => typeof x === 'number' && Number.isFinite(x) && x > 0)) return false;
   return s.action === 'BUY' ? s.stopPrice < s.referencePrice && s.targetPrice > s.referencePrice : s.stopPrice > s.referencePrice && s.targetPrice < s.referencePrice;
@@ -27,7 +32,7 @@ function makeServer(env=process.env) {
     const path=url.pathname;
     const send=(status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
     const ready=typeof tvToken==='string' && tvToken.length>=20 && typeof botToken==='string' && botToken.length>=20 && tvToken!==botToken;
-    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v2-m1',ready,checks:{webhookTokenValid:typeof tvToken==='string'&&tvToken.length>=20,botTokenValid:typeof botToken==='string'&&botToken.length>=20,distinctTokens:tvToken!==botToken}});
+    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v2-m1-intrabar',ready,checks:{webhookTokenValid:typeof tvToken==='string'&&tvToken.length>=20,botTokenValid:typeof botToken==='string'&&botToken.length>=20,distinctTokens:tvToken!==botToken}});
     if (!ready) return send(503,{error:'Configure distinct tokens, at least 20 characters each'});
     if (req.method==='GET' && path==='/dg-v2/signal') {
       if(!equal(req.headers['x-bot-token'],botToken)) return send(401,{error:'Unauthorized'});
@@ -49,10 +54,14 @@ function makeServer(env=process.env) {
       if(!equal(body.token,tvToken)) return send(401,{error:'Unauthorized'});
       let s=body.signal;
       if (s && s.strategy === M1 && typeof s.barTime === 'string') {
-        const close = Date.parse(s.barTime) + 60000;
-        s={...s,barClose:close,signalId:`${s.action}-${close}`};
+        const open = Date.parse(s.barTime);
+        const close = open + 60000;
+        s={...s,barOpen:open,barClose:close,signalId:`${s.action}-${close}`};
       }
-      if(!validate(s)) return send(422,{error:'Invalid or stale DG V2 signal'});
+      if(!validate(s)) {
+        console.log('Rejected DG V2 signal', JSON.stringify({strategy:s && s.strategy,action:s && s.action,barOpen:s && s.barOpen,barClose:s && s.barClose,receivedAt:Date.now()}));
+        return send(422,{error:'Invalid or stale DG V2 signal'});
+      }
       for(const [id,t] of seen) if(Date.now()-t>3600000) seen.delete(id);
       const key=s.strategy+':'+s.signalId;
       const latest=latestByStrategy.get(s.strategy);
@@ -69,3 +78,4 @@ function makeServer(env=process.env) {
 }
 module.exports={makeServer,validate};
 if(require.main===module) makeServer().listen(process.env.PORT||3000,()=>console.log('DG V2 demo receiver started'));
+
