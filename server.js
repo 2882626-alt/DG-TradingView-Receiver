@@ -5,15 +5,16 @@ const crypto = require('node:crypto');
 const STRATEGY = 'DG_GOLD_V2';
 const MAX_AGE = 90_000;
 const DIRECT = 'DG_GOLD_V2_DIRECT';
+const M1 = 'DG_GOLD_V2_DIRECT_M1';
 function equal(a,b) {
   return typeof a === 'string' && typeof b === 'string' && b.length >= 20 &&
     crypto.timingSafeEqual(crypto.createHash('sha256').update(a).digest(), crypto.createHash('sha256').update(b).digest());
 }
 function validate(s, now=Date.now()) {
-  if (!s || ![STRATEGY,DIRECT].includes(s.strategy) || s.symbol !== 'XAUUSD' || s.timeframe !== '5' || !['BUY','SELL'].includes(s.action)) return false;
+  if (!s || ![STRATEGY,DIRECT,M1].includes(s.strategy) || s.symbol !== 'XAUUSD' || s.timeframe !== (s.strategy === M1 ? '1' : '5') || !['BUY','SELL'].includes(s.action)) return false;
   if (typeof s.signalId !== 'string' || s.signalId !== `${s.action}-${s.barClose}`) return false;
-  if (!Number.isSafeInteger(s.barClose) || s.barClose % 300000 !== 0 || now-s.barClose > MAX_AGE || s.barClose-now > 10000) return false;
-  if (s.strategy === DIRECT) return true;
+  if (!Number.isSafeInteger(s.barClose) || s.barClose % (s.strategy === M1 ? 60000 : 300000) !== 0 || now-s.barClose > MAX_AGE || s.barClose-now > 10000) return false;
+  if (s.strategy === DIRECT || s.strategy === M1) return true;
   if (![s.referencePrice,s.stopPrice,s.targetPrice].every(x => typeof x === 'number' && Number.isFinite(x) && x > 0)) return false;
   return s.action === 'BUY' ? s.stopPrice < s.referencePrice && s.targetPrice > s.referencePrice : s.stopPrice > s.referencePrice && s.targetPrice < s.referencePrice;
 }
@@ -26,12 +27,12 @@ function makeServer(env=process.env) {
     const path=url.pathname;
     const send=(status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
     const ready=typeof tvToken==='string' && tvToken.length>=20 && typeof botToken==='string' && botToken.length>=20 && tvToken!==botToken;
-    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v2-direct',ready,checks:{webhookTokenValid:typeof tvToken==='string'&&tvToken.length>=20,botTokenValid:typeof botToken==='string'&&botToken.length>=20,distinctTokens:tvToken!==botToken}});
+    if (req.method==='GET' && path==='/health') return send(ready?200:503,{service:STRATEGY,version:'demo-v2-m1',ready,checks:{webhookTokenValid:typeof tvToken==='string'&&tvToken.length>=20,botTokenValid:typeof botToken==='string'&&botToken.length>=20,distinctTokens:tvToken!==botToken}});
     if (!ready) return send(503,{error:'Configure distinct tokens, at least 20 characters each'});
     if (req.method==='GET' && path==='/dg-v2/signal') {
       if(!equal(req.headers['x-bot-token'],botToken)) return send(401,{error:'Unauthorized'});
       const strategy=url.searchParams.get('strategy')||STRATEGY;
-      if(![STRATEGY,DIRECT].includes(strategy)) return send(400,{error:'Unknown strategy'});
+      if(![STRATEGY,DIRECT,M1].includes(strategy)) return send(400,{error:'Unknown strategy'});
       const latest=latestByStrategy.get(strategy);
       return send(200,{strategy,signal:latest && Date.now()-latest.barClose<=MAX_AGE?latest:null});
     }
